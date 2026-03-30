@@ -159,54 +159,172 @@ Monitor:
 - Pentagon/White House ground force authorization (check: daily)
 ```
 
-### Daily Batch Runner (Server Automation)
+### Daily Batch Runner (Automated Paper-Trading)
 
-Run Echo as a daily paper-trading pipeline alongside your existing trading bot.
+Echo includes a daily batch runner that can paper-trade alongside any Polymarket strategy. It scans markets, runs Echo analysis on each, logs predictions, and tracks accuracy over time -- all without placing real trades.
+
+This lets you **test whether Echo's probability estimates beat the market** before committing real capital.
+
+#### Quick Start
 
 ```bash
-# Full daily run: scan markets → analyze with Echo → generate report
-./run_echo_daily.sh
+# Test with 3 markets first
+python3 -m helpers.echo_daily_runner --scan-only
+python3 -m helpers.echo_daily_runner --max-markets 3
 
-# Scan-only (see what markets Echo would analyze)
-./run_echo_daily.sh --scan-only
+# Full daily run (all markets, full Map-Reduce analysis)
+python3 -m helpers.echo_daily_runner
 
-# Quick mode (single-agent, ~1min/market instead of ~5min)
-./run_echo_daily.sh --quick
-
-# Limit to N markets (for testing)
-./run_echo_daily.sh --max-markets 5
-
-# Compare Echo predictions vs bot's actual trades
-./run_echo_daily.sh --compare
+# Quick mode (~1 min/market instead of ~5 min)
+python3 -m helpers.echo_daily_runner --quick
 ```
 
-**Setup for daily automation (cron):**
+Or use the shell script:
 
 ```bash
-# Add to crontab on your server (run daily at 10:00 UTC)
+./run_echo_daily.sh                    # Full run
+./run_echo_daily.sh --scan-only        # Just scan, see candidates
+./run_echo_daily.sh --quick            # Fast single-agent mode
+./run_echo_daily.sh --max-markets 5    # Limit scope
+./run_echo_daily.sh --compare          # Compare vs your trading bot
+```
+
+#### How It Works
+
+```
+Daily Pipeline:
+
+  1. SCAN       Fetch active Polymarket markets
+                Apply filters (election, social media, etc.)
+                Select candidates: YES price 10-60%, TTE 1-60d
+
+  2. ANALYZE    For each market, run Echo via claude CLI
+                Full Map-Reduce: 5 parallel research agents
+                Or quick mode: single-agent analysis
+
+  3. LOG        Save predictions to predictions.jsonl
+                Record: echo_probability, market_price,
+                confidence, domain, timestamp
+
+  4. REPORT     Generate daily markdown report
+                Flag disagreements (Echo vs Market > 10%)
+                Paper trade signals (buy NO / buy YES)
+
+  5. COMPARE    After markets resolve, score accuracy
+                Brier scores: Echo vs Market baseline
+                Track: does Echo beat the market?
+```
+
+#### Server Setup (for automated daily runs)
+
+**Prerequisites:**
+- A server or always-on machine with internet access
+- Claude Code CLI installed and authenticated (`npm install -g @anthropic-ai/claude-code && claude login`)
+- Python 3.8+ with `requests` package
+- This repo cloned with `$ECHO_HOME` set and skill installed (see [Installation](#installation))
+
+**Step 1: Test manually**
+
+```bash
+# SSH to your server
+ssh user@your-server
+
+# First run — scan only to see what markets Echo would analyze
+cd $ECHO_HOME
+python3 -m helpers.echo_daily_runner --scan-only
+
+# Test with a few markets
+python3 -m helpers.echo_daily_runner --max-markets 3
+```
+
+**Step 2: Set up cron for daily automation**
+
+```bash
+# Edit crontab
+crontab -e
+
+# Add this line (runs daily at 10:00 UTC)
 0 10 * * * cd /path/to/echo-polymarket && ./run_echo_daily.sh >> echo_cron.log 2>&1
 ```
 
-**What the daily runner does:**
-1. Scans Polymarket using the same filters as your trading bot (`strict_elon_social`)
-2. For each candidate market (YES price 10-60%, TTE 1-60 days), runs full Echo analysis via `claude` CLI
-3. Logs all predictions to `predictions.jsonl` with timestamps
-4. Generates a daily report with:
-   - Echo probability vs market price for every market
-   - Major disagreements (>10% delta) flagged
-   - Paper trade signals (where Echo thinks the market is mispriced)
-5. Compares against your bot's actual trade/rejection decisions
+**Step 3: Monitor accuracy over time**
 
-**Output structure:**
+```bash
+# Check if any predicted markets have resolved
+python3 -m helpers.track_predictions check
+
+# See accuracy leaderboard
+python3 -m helpers.track_predictions leaderboard
+
+# Raw accuracy data as JSON
+python3 -m helpers.track_predictions score
+```
+
+#### Running Alongside an Existing Trading Bot
+
+If you already have a Polymarket trading bot, Echo can run as a paper-trading shadow:
+
+```bash
+# 1. Run your trading bot as usual (live or dry-run)
+python your_trading_bot.py --bankroll 5000
+
+# 2. Run Echo on the same markets (paper-trade only, no real orders)
+python3 -m helpers.echo_daily_runner
+
+# 3. Compare: did Echo agree or disagree with your bot's trades?
+python3 -m helpers.echo_daily_runner --compare --date 2026-03-30
+```
+
+The comparison report shows for each market:
+- What your bot did (traded or skipped, and why)
+- What Echo predicted (probability + confidence)
+- Whether they agreed or disagreed
+
+Over time, this reveals whether Echo adds signal your bot doesn't capture.
+
+#### Customizing the Market Scanner
+
+The daily runner scans for markets matching these criteria:
+- **YES price**: 10-60% (the "dark horse" range where mispricings are common)
+- **Time to expiry**: 1-60 days
+- **Filter mode**: `strict_elon_social` (elections + Elon Musk social media markets)
+
+You can change the filter mode:
+
+```bash
+# Elections only (strictest filter)
+python3 -m helpers.echo_daily_runner --filter-mode strict
+
+# All politics + social media
+python3 -m helpers.echo_daily_runner --filter-mode strict_elon_social
+```
+
+To add entirely new market categories (crypto, sports), edit the `scan_markets()` function in `helpers/echo_daily_runner.py`.
+
+#### Output Structure
+
+Each daily run produces:
+
 ```
 echo_output/
   2026-03-30/
-    batch.json       # Scanned markets
-    report.md        # Daily analysis report
-    comparison.md    # Echo vs bot comparison
-    0x1234...json    # Individual market predictions
-    run.log          # Execution log
+    batch.json          # All scanned candidate markets (JSON)
+    report.md           # Daily analysis report (markdown)
+    comparison.md       # Echo vs bot comparison
+    0x1234abcd....json  # Individual market prediction
+    0x5678efgh....json  # Individual market prediction
+    run.log             # Full execution log
+  2026-03-31/
+    ...
 ```
+
+#### Time Estimates
+
+| Mode | Per Market | 35 Markets |
+|------|-----------|------------|
+| Full Map-Reduce (5 agents) | ~5 min | ~3 hours |
+| Quick (single agent) | ~1 min | ~35 min |
+| Scan only (no analysis) | — | ~10 sec |
 
 ## Domain Rubrics
 
@@ -226,17 +344,18 @@ Rubrics are in `rubrics/` and can be customized.
 ```
 echo-polymarket/
 +-- skill/
-|   +-- SKILL.md              # Claude Code skill definition
+|   +-- SKILL.md                # Claude Code skill definition
 +-- helpers/
-|   +-- fetch_market.py       # Polymarket API client
-|   +-- format_report.py      # Report formatting (markdown/JSON)
-|   +-- track_predictions.py  # Prediction logging & Brier scoring
+|   +-- fetch_market.py         # Polymarket API client
+|   +-- format_report.py        # Report formatting (markdown/JSON)
+|   +-- track_predictions.py    # Prediction logging & Brier scoring
+|   +-- echo_daily_runner.py    # Daily batch scanner & analyzer
 +-- rubrics/
-|   +-- politics.md           # 12-dimension politics rubric
-|   +-- crypto.md             # 12-dimension crypto rubric
-|   +-- sports.md             # 12-dimension sports rubric
-|   +-- economics.md          # 12-dimension economics rubric
-+-- run_echo_daily.sh          # Daily batch orchestration script
+|   +-- politics.md             # 12-dimension politics rubric
+|   +-- crypto.md               # 12-dimension crypto rubric
+|   +-- sports.md               # 12-dimension sports rubric
+|   +-- economics.md            # 12-dimension economics rubric
++-- run_echo_daily.sh           # Daily batch orchestration script
 +-- README.md
 +-- LICENSE
 ```
