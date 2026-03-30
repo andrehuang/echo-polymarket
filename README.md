@@ -92,7 +92,9 @@ Open Claude Code and type `/echo` -- you should see the skill listed.
 
 ## Usage
 
-### Full Analysis (Map-Reduce)
+### Interactive (Claude Code Skill)
+
+#### Full Analysis (Map-Reduce)
 
 ```
 /echo https://polymarket.com/event/next-us-president
@@ -157,6 +159,55 @@ Monitor:
 - Pentagon/White House ground force authorization (check: daily)
 ```
 
+### Daily Batch Runner (Server Automation)
+
+Run Echo as a daily paper-trading pipeline alongside your existing trading bot.
+
+```bash
+# Full daily run: scan markets → analyze with Echo → generate report
+./run_echo_daily.sh
+
+# Scan-only (see what markets Echo would analyze)
+./run_echo_daily.sh --scan-only
+
+# Quick mode (single-agent, ~1min/market instead of ~5min)
+./run_echo_daily.sh --quick
+
+# Limit to N markets (for testing)
+./run_echo_daily.sh --max-markets 5
+
+# Compare Echo predictions vs bot's actual trades
+./run_echo_daily.sh --compare
+```
+
+**Setup for daily automation (cron):**
+
+```bash
+# Add to crontab on your server (run daily at 10:00 UTC)
+0 10 * * * cd /path/to/echo-polymarket && ./run_echo_daily.sh >> echo_cron.log 2>&1
+```
+
+**What the daily runner does:**
+1. Scans Polymarket using the same filters as your trading bot (`strict_elon_social`)
+2. For each candidate market (YES price 10-60%, TTE 1-60 days), runs full Echo analysis via `claude` CLI
+3. Logs all predictions to `predictions.jsonl` with timestamps
+4. Generates a daily report with:
+   - Echo probability vs market price for every market
+   - Major disagreements (>10% delta) flagged
+   - Paper trade signals (where Echo thinks the market is mispriced)
+5. Compares against your bot's actual trade/rejection decisions
+
+**Output structure:**
+```
+echo_output/
+  2026-03-30/
+    batch.json       # Scanned markets
+    report.md        # Daily analysis report
+    comparison.md    # Echo vs bot comparison
+    0x1234...json    # Individual market predictions
+    run.log          # Execution log
+```
+
 ## Domain Rubrics
 
 Each domain has a 12-dimension rubric that guides the research agents:
@@ -185,6 +236,7 @@ echo-polymarket/
 |   +-- crypto.md             # 12-dimension crypto rubric
 |   +-- sports.md             # 12-dimension sports rubric
 |   +-- economics.md          # 12-dimension economics rubric
++-- run_echo_daily.sh          # Daily batch orchestration script
 +-- README.md
 +-- LICENSE
 ```
