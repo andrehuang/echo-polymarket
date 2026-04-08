@@ -244,8 +244,9 @@ def run_echo_analysis(market: Dict, mode: str = "map_reduce") -> Optional[Dict]:
 
     quick_flag = " --quick" if mode == "quick" else ""
 
-    # Use the /echo skill via claude CLI
-    prompt = f"/echo{quick_flag} {slug}" if slug else f"/echo{quick_flag} {market['condition_id']}"
+    # Use the /echo skill via claude CLI with batch-output
+    identifier = slug if slug else market['condition_id']
+    prompt = f"/echo{quick_flag} --batch-output {identifier}"
 
     log.info(f"Running Echo on: {question[:60]}... (YES={yes_price:.1%}, TTE={tte:.0f}d)")
 
@@ -296,16 +297,19 @@ def parse_echo_output(output: str, market: Dict) -> Optional[Dict]:
     }
 
     # Try to extract probability from various formats
-    # Format 1: "Echo probability | **XX%**"
-    prob_match = re.search(r'Echo probability\s*\|\s*\*?\*?(\d+(?:\.\d+)?)\%', output)
+    # Format 1: Batch output "ECHO_PROBABILITY: XX%"
+    prob_match = re.search(r'ECHO_PROBABILITY:\s*(\d+(?:\.\d+)?)\%', output)
     if not prob_match:
-        # Format 2: "PROBABILITY_ESTIMATE: 0.XX"
+        # Format 2: "Echo probability | **XX%**"
+        prob_match = re.search(r'Echo probability\s*\|\s*\*?\*?(\d+(?:\.\d+)?)\%', output)
+    if not prob_match:
+        # Format 3: "PROBABILITY_ESTIMATE: 0.XX"
         prob_match = re.search(r'PROBABILITY_ESTIMATE:\s*0?\.?(\d+)', output)
     if not prob_match:
-        # Format 3: "Echo probability: XX%"
+        # Format 4: "Echo probability: XX%"
         prob_match = re.search(r'Echo probability[:\s]+(\d+(?:\.\d+)?)\%', output)
     if not prob_match:
-        # Format 4: any "XX%" near "Echo" or "probability"
+        # Format 5: any "XX%" near "Echo" or "probability"
         prob_match = re.search(r'(?:echo|probability|estimate)[^%]*?(\d{1,3}(?:\.\d+)?)\%', output, re.IGNORECASE)
 
     if prob_match:
@@ -325,7 +329,10 @@ def parse_echo_output(output: str, market: Dict) -> Optional[Dict]:
     prediction["confidence"] = conf_match.group(1).lower() if conf_match else "medium"
 
     # Try to extract confidence interval
-    ci_match = re.search(r'90% CI\s*\|\s*\[(\d+(?:\.\d+)?)\%?,?\s*(\d+(?:\.\d+)?)\%?\]', output)
+    # Batch format: "CONFIDENCE_INTERVAL: [XX%, XX%]"
+    ci_match = re.search(r'CONFIDENCE_INTERVAL:\s*\[(\d+(?:\.\d+)?)\%?,?\s*(\d+(?:\.\d+)?)\%?\]', output)
+    if not ci_match:
+        ci_match = re.search(r'90% CI\s*\|\s*\[(\d+(?:\.\d+)?)\%?,?\s*(\d+(?:\.\d+)?)\%?\]', output)
     if ci_match:
         low = float(ci_match.group(1))
         high = float(ci_match.group(2))
@@ -336,7 +343,10 @@ def parse_echo_output(output: str, market: Dict) -> Optional[Dict]:
         prediction["confidence_interval"] = [round(low, 4), round(high, 4)]
 
     # Try to extract fragility
-    frag_match = re.search(r'Fragility\s*\|\s*(\d+(?:\.\d+)?)', output)
+    # Batch format: "FRAGILITY: X.XX"
+    frag_match = re.search(r'FRAGILITY:\s*(\d+(?:\.\d+)?)', output)
+    if not frag_match:
+        frag_match = re.search(r'Fragility\s*\|\s*(\d+(?:\.\d+)?)', output)
     if not frag_match:
         frag_match = re.search(r'fragility[:\s]+(\d+(?:\.\d+)?)', output, re.IGNORECASE)
     prediction["fragility_score"] = float(frag_match.group(1)) if frag_match else 0.5
